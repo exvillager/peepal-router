@@ -47,8 +47,9 @@ const matchedhandler = router.search("GET", "/");
 
 Output:
   {
-    params: {},
-    handler: [GlobalMiddleware1,GlobalMiddleware2,handler]
+    params: undefined,
+    middlewares: [GlobalMiddleware1, GlobalMiddleware2],
+    handler: [handler]
   }
 
 // Route specific middleware
@@ -64,11 +65,14 @@ Output:
 
 ```js
 {
-  params: { id: 42 },
+  params: { id: "42" },
+  middlewares: undefined,
   handler: [GlobalMiddleware1,GlobalMiddleware2,userMiddleware,userHandler]
 }
 
 ```
+
+`find()` (and its unstable `compiledFind()` backing) pre-bakes middlewares and the handler into one array at compile time, so `middlewares` is always `undefined` there. `search()`/`optimisedSearch()` keep them separate instead - see the shape above.
 
 ---
 
@@ -122,17 +126,17 @@ Key design goals:
 
 ## API
 
-### router.add(method, path, handler)
-### router.insert(method, path, handler)
+### router.add(method, path, handler | handler[])
+### router.insert(method, path, handler | handler[])
 
-
-Register a route.
+Register a route. Accepts one handler or an array of handlers for the same route/method.
 
 ### router.pushMiddleware(path, middleware)
 
 Register middleware for a path or globally.
 
 ### router.search(method, path)
+### router.optimisedSearch(method, path)
 ### router.find(method, path)
 
 Find matching route and collect handlers.
@@ -141,8 +145,9 @@ Returns:
 
 ```ts
 {
-  params: Record<string, string>;
-  handler: Function[];
+  params: Record<string, string> | undefined;
+  middlewares: Function[] | undefined;
+  handler: Function[] | undefined;
 }
 ```
 

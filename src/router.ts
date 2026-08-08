@@ -6,7 +6,7 @@ export const ALL_METHOD = "ALL";
 class TrieNodes {
   children: Record<string, TrieNodes>;
   isEndOfWord: boolean;
-  handlers: Record<string, Function> | undefined;
+  handlers: Record<string, Function[]> | undefined;
   middlewares: Function[];
   params: Record<string, string>;
   finalHandler: Record<string, Array<Function> | undefined>;
@@ -62,12 +62,13 @@ export class TrieRouter {
     node.isEndOfWord = true;
   }
 
-  insert(method: string, pattern: string, handler: Function) {
+  insert(method: string, pattern: string, handler: Function | Function[]) {
+    const handlers = Array.isArray(handler) ? handler : [handler];
     let node = this.root;
 
     if (pattern === "/") {
       node.isEndOfWord = true;
-      node.handlers[method] = handler;
+      node.handlers[method] = handlers;
       return;
     }
 
@@ -89,11 +90,11 @@ export class TrieRouter {
         node.params[method] = cleanParam;
       }
     }
-    node.handlers[method] = handler;
+    node.handlers[method] = handlers;
     node.isEndOfWord = true;
   }
 
-  add(method: string, pattern: string, handler: Function) {
+  add(method: string, pattern: string, handler: Function | Function[]) {
     return this.insert(method, pattern, handler);
   }
 
@@ -267,7 +268,7 @@ export class TrieRouter {
       if (!node.finalHandler) node.finalHandler = {};
       const ownMiddlewares = [...inheritedMiddlewares, ...node?.middlewares];
       for (const method in node.handlers) {
-        const finalHandler = [...ownMiddlewares, node.handlers[method]];
+        const finalHandler = [...ownMiddlewares, ...node.handlers[method]];
         node.finalHandler[method] = finalHandler;
       }
     }
