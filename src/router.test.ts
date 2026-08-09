@@ -220,7 +220,7 @@ describe("wildcard and dynamic middlewares combined", () => {
 
 // ---------------------------------------------------------------------------
 // Ported from diesel's lib/router/trie.test.ts, run against all three lookup
-// strategies peepar exposes (search / optimisedSearch / find) since they each
+// strategies peepal exposes (search / optimisedSearch / find) since they each
 // re-implement the walk independently and can drift out of sync.
 // ---------------------------------------------------------------------------
 
