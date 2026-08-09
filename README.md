@@ -24,7 +24,7 @@ Peepar name is inspired by the **Peepal (Sacred fig) tree**, known for its deep 
 ## Installation
 
 ```bash
-npm install peepal-router
+npm install peepar
 ```
 
 ---
@@ -32,7 +32,7 @@ npm install peepal-router
 ## Basic Usage
 
 ```js
-import { TrieRouter } from "peepal-router";
+import { TrieRouter } from "peepar";
 
 const router = new TrieRouter();
 

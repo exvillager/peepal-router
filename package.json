@@ -1,5 +1,5 @@
 {
-  "name": "peepal-router",
+  "name": "peepar",
   "version": "0.5.0",
   "description": "a fast and minimal trie based http router",
   "keywords": [
