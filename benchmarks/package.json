@@ -1,0 +1,16 @@
+{
+  "name": "peepal-router-benchmarks",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Benchmarks comparing peepal-router against other router libraries",
+  "scripts": {
+    "bench": "bash bench.sh",
+    "bench:peepal": "bun routers/peepal-bench.ts",
+    "bench:routers": "bun routers/bench.ts"
+  },
+  "dependencies": {
+    "find-my-way": "^9.7.0",
+    "rou3": "^0.9.1"
+  }
+}
