@@ -36,27 +36,37 @@ import { TrieRouter } from "peepal-router";
 
 const router = new TrieRouter();
 
-// Global Middleware
-router.pushMiddleware('/', function GlobalMiddleware1() => 'global middleware')
-router.pushMiddleware('/', function Middleware2() => 'global middleware 2')
+// Global middleware
+function globalMiddleware1() { return "global middleware"; }
+function globalMiddleware2() { return "global middleware 2"; }
+router.pushMiddleware("/", globalMiddleware1);
+router.pushMiddleware("/", globalMiddleware2);
 
+function homeHandler() { return "home"; }
+router.add("GET", "/", homeHandler);
 
-router.add("GET", "/", function handler () => "home");
-
-const matchedhandler = router.search("GET", "/");
+const matched = router.search("GET", "/");
+```
 
 Output:
-  {
-    params: undefined,
-    middlewares: [GlobalMiddleware1, GlobalMiddleware2],
-    handler: [handler]
-  }
 
+```js
+{
+  params: undefined,
+  middlewares: [globalMiddleware1, globalMiddleware2],
+  handler: [homeHandler]
+}
+```
+
+```js
 // Route specific middleware
-router.pushMiddleware("/users", function userMiddleware(ctx) => {
+function userMiddleware(ctx) {
   console.log("/users middleware");
-});
-router.add("GET", "/users/:id", function userHandler() => "user profile");
+}
+router.pushMiddleware("/users", userMiddleware);
+
+function userHandler() { return "user profile"; }
+router.add("GET", "/users/:id", userHandler);
 
 const result = router.find("GET", "/users/42");
 ```
@@ -67,12 +77,18 @@ Output:
 {
   params: { id: "42" },
   middlewares: undefined,
-  handler: [GlobalMiddleware1,GlobalMiddleware2,userMiddleware,userHandler]
+  handler: [globalMiddleware1, globalMiddleware2, userMiddleware, userHandler]
 }
-
 ```
 
 `find()` (and its unstable `compiledFind()` backing) pre-bakes middlewares and the handler into one array at compile time, so `middlewares` is always `undefined` there. `search()`/`optimisedSearch()` keep them separate instead - see the shape above.
+
+> **Note:** the first call to `find()` compiles the trie once and permanently
+> switches the router over to `compiledFind()`. Any `add()`/`insert()`/
+> `pushMiddleware()` calls made *after* that first `find()` call won't be
+> picked up unless you call `router.compile()` again. Register all routes
+> and middleware before the first `find()` call, or stick to `search()` /
+> `optimisedSearch()` if routes are added dynamically at runtime.
 
 ---
 
@@ -131,32 +147,66 @@ Key design goals:
 
 Register a route. Accepts one handler or an array of handlers for the same route/method.
 
-### router.pushMiddleware(path, middleware)
+Use `ALL_METHOD` (exported from the package) as the method to register a
+fallback handler that matches any method that doesn't have its own handler
+for that path:
 
-Register middleware for a path or globally.
+```js
+import { TrieRouter, ALL_METHOD } from "peepal-router";
+
+router.add(ALL_METHOD, "/health", () => "ok");
+```
+
+### router.pushMiddleware(path, middleware | middleware[])
+### router.addMiddleware(path, middleware | middleware[])
+
+Register middleware for a path, or globally when `path` is `"/"`.
+`addMiddleware` is just an alias for `pushMiddleware`. Only the middleware
+bound to a matched node (plus any wildcard ancestor) is included - middleware
+registered on a static ancestor path does not leak into its descendants.
 
 ### router.search(method, path)
 ### router.optimisedSearch(method, path)
-### router.find(method, path)
 
-Find matching route and collect handlers.
-
-Returns:
+Walk the trie on every call and return middlewares and the route handler
+separately:
 
 ```ts
 {
   params: Record<string, string> | undefined;
-  middlewares: Function[] | undefined;
+  middlewares: Function[];       // never undefined, may be empty
   handler: Function[] | undefined;
 }
 ```
+
+`optimisedSearch` is functionally identical to `search` - it just parses the
+path without `split("/")`, avoiding an intermediate array allocation.
+
+### router.find(method, path)
+### router.compile()
+
+`find()` bakes each route's middlewares and handlers into a single array
+ahead of time. The first call to `find()` runs `compile()` for you and
+switches the router to the compiled lookup path (`compiledFind`) from then
+on:
+
+```ts
+{
+  params: Record<string, string> | undefined;
+  middlewares: undefined;        // always undefined - already merged into handler
+  handler: Function[] | undefined; // middlewares + route handler(s), in order
+}
+```
+
+Call `router.compile()` yourself if you add routes/middleware after having
+already called `find()` once, so the compiled tree picks them up.
 
 ---
 
 ## Example
 
 ```js
-import { TrieRouter } from "peepar";
+import { TrieRouter } from "peepal-router";
 
 const router = new TrieRouter();
 
