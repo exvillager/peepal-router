@@ -1,11 +1,11 @@
-import { PeepalRouter } from './peepal';
+import { PeepalRouter, PeepalCompiledRouter } from './peepal';
 import { Rou3Router } from './rou3';
 import { FindMyWayRouter } from './find-my-way';
 import type { RouterInstance } from './interface';
 
 // Configuration
 const NUM_ROUTES = 3000;
-const SEARCH_ITERATIONS = 2_000_000;
+const CATEGORY_ITERATIONS = 500_000;
 const LATENCY_SAMPLES = 100_000;
 
 const dummyHandler = () => "ok";
@@ -41,30 +41,43 @@ function makeRoutes(n: number): string[] {
 
     // Multiple consecutive parameters
     routes.push(`/flights/:departure/:destination/:date/seat/${i}`);
+
+    // Wildcard / catch-all routes
+    routes.push(`/cdn/${i}/assets/*`);
   }
   return routes;
 }
 
-function makeLookupPaths(n: number): string[] {
-  const paths = new Array<string>(SEARCH_ITERATIONS);
-  for (let i = 0; i < SEARCH_ITERATIONS; i++) {
-    const id = (Math.random() * n) | 0;
-    const r = Math.random();
+type PathCategory = "static" | "param" | "wildcard" | "miss";
 
-    if (r < 0.20) {
-      paths[i] = `/api/users/${id}`;
-    } else if (r < 0.40) {
-      paths[i] = `/api/posts/${id}/comments/999`;
-    } else if (r < 0.60) {
-      paths[i] = `/shop/categories/electronics/devices/mobile/products/${id}`;
-    } else if (r < 0.80) {
-      paths[i] = `/flights/JFK/LHR/20261201/seat/${id}`;
-    } else {
-      // Intentional 404 misses to test worst case traversal
-      paths[i] = `/api/unknown/path/that/does/not/exist/${id}`;
-    }
+function makeLookupPathSets(n: number): Record<PathCategory, string[]> {
+  const sets: Record<PathCategory, string[]> = {
+    static: new Array(CATEGORY_ITERATIONS),
+    param: new Array(CATEGORY_ITERATIONS),
+    wildcard: new Array(CATEGORY_ITERATIONS),
+    miss: new Array(CATEGORY_ITERATIONS),
+  };
+
+  for (let i = 0; i < CATEGORY_ITERATIONS; i++) {
+    const id = (Math.random() * n) | 0;
+
+    // alternate between the two static-route shapes registered above
+    sets.static[i] = i % 2 === 0
+      ? `/api/users/${id}`
+      : `/shop/categories/electronics/devices/mobile/products/${id}`;
+
+    // alternate between the two param-route shapes registered above
+    sets.param[i] = i % 2 === 0
+      ? `/api/posts/${id}/comments/999`
+      : `/flights/JFK/LHR/20261201/seat/${id}`;
+
+    sets.wildcard[i] = `/cdn/${id}/assets/some/deep/nested/path.js`;
+
+    // intentional 404 misses to test worst case traversal
+    sets.miss[i] = `/api/unknown/path/that/does/not/exist/${id}`;
   }
-  return paths;
+
+  return sets;
 }
 
 // Benchmark Stages
@@ -88,7 +101,8 @@ function benchmarkInsert(router: RouterInstance, routes: string[], name: string)
 
 function benchmarkLookup(router: RouterInstance, paths: string[], name: string): void {
   // Warmup the JIT compiler
-  for (let i = 0; i < 100000; i++) {
+  const warmupCount = Math.min(100_000, paths.length);
+  for (let i = 0; i < warmupCount; i++) {
     router.find("GET", paths[i]!);
   }
 
@@ -101,13 +115,14 @@ function benchmarkLookup(router: RouterInstance, paths: string[], name: string):
 
   const t1 = process.hrtime.bigint();
   const ms = Number(t1 - t0) / 1_000_000;
-  const rps = (SEARCH_ITERATIONS / (ms / 1000)).toFixed(0);
+  const rps = (paths.length / (ms / 1000)).toFixed(0);
 
   console.log(`${name} lookup: ${ms.toFixed(2)} ms | RPS: ${rps}`);
 }
 
 function benchmarkParamAccess(router: RouterInstance, paths: string[], name: string): void {
-  for (let i = 0; i < 100000; i++) {
+  const warmupCount = Math.min(100_000, paths.length);
+  for (let i = 0; i < warmupCount; i++) {
     router.find("GET", paths[i]!);
   }
 
@@ -129,7 +144,8 @@ function benchmarkParamAccess(router: RouterInstance, paths: string[], name: str
 function latencyTest(router: RouterInstance, paths: string[], name: string): void {
   const samples = new Float64Array(LATENCY_SAMPLES);
 
-  for (let i = 0; i < 100000; i++) {
+  const warmupCount = Math.min(100_000, paths.length);
+  for (let i = 0; i < warmupCount; i++) {
     router.find("GET", paths[i]!);
   }
 
@@ -162,10 +178,12 @@ function latencyTest(router: RouterInstance, paths: string[], name: string): voi
 function runSuite(title: string, routes: string[], lookupBase: number): void {
   console.log(`\n===== ${title} =====`);
 
-  const paths = makeLookupPaths(lookupBase);
+  const pathSets = makeLookupPathSets(lookupBase);
+  const categories: PathCategory[] = ["static", "param", "wildcard", "miss"];
 
   const routers: Record<string, RouterInstance> = {
-    Peepal: new PeepalRouter(),
+    "Peepal(search)": new PeepalRouter(),
+    "Peepal(find)": new PeepalCompiledRouter(),
     Rou3: new Rou3Router(),
     FindMyWay: new FindMyWayRouter(),
   };
@@ -175,19 +193,23 @@ function runSuite(title: string, routes: string[], lookupBase: number): void {
     benchmarkInsert(r, routes, name);
   }
 
-  console.log("\n--- Lookup Phase ---");
-  for (const [name, r] of Object.entries(routers)) {
-    benchmarkLookup(r, paths, name);
-  }
+  for (const category of categories) {
+    const paths = pathSets[category];
 
-  console.log("\n--- Parameter Access Phase ---");
-  for (const [name, r] of Object.entries(routers)) {
-    benchmarkParamAccess(r, paths, name);
-  }
+    console.log(`\n--- Lookup Phase (${category}) ---`);
+    for (const [name, r] of Object.entries(routers)) {
+      benchmarkLookup(r, paths, name);
+    }
 
-  console.log("\n--- Latency Phase ---");
-  for (const [name, r] of Object.entries(routers)) {
-    latencyTest(r, paths, name);
+    console.log(`\n--- Parameter Access Phase (${category}) ---`);
+    for (const [name, r] of Object.entries(routers)) {
+      benchmarkParamAccess(r, paths, name);
+    }
+
+    console.log(`\n--- Latency Phase (${category}) ---`);
+    for (const [name, r] of Object.entries(routers)) {
+      latencyTest(r, paths, name);
+    }
   }
 }
 
