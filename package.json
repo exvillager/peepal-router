@@ -1,6 +1,6 @@
 {
   "name": "peepal-router",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "a fast and minimal trie based http router",
   "keywords": [
     "http-router",
