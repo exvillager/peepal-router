@@ -23,7 +23,6 @@ class TrieNodes {
 export class TrieRouter {
   root: TrieNodes;
   globalMiddlewares: Function[];
-  is_gm: boolean = false; // is globalMiddlewares
   isCompiled: boolean;
   find: Function;
   constructor() {
@@ -41,7 +40,6 @@ export class TrieRouter {
     if (!Array.isArray(handlers)) handlers = [handlers];
     if (pattern === "/") {
       this.globalMiddlewares.push(...handlers);
-      this.is_gm = true;
       return;
     }
 
@@ -104,7 +102,7 @@ export class TrieRouter {
     let node = this.root;
     const pathSegments = pattern.split("/");
 
-    let middlewares: Array<Function> = this.is_gm ? this.globalMiddlewares.slice() : [];
+    let middlewares: Array<Function> = this.globalMiddlewares.slice();
     let params: Record<string, string> | undefined;
 
     for (let i = 0; i < pathSegments.length; i++) {
@@ -157,7 +155,7 @@ export class TrieRouter {
     let node = this.root;
     let element = "";
 
-    let middlewares: Array<Function> = this.is_gm ? this.globalMiddlewares.slice() : [];
+    let middlewares: Array<Function> = this.globalMiddlewares.slice();
     let params: Record<string, string> | undefined;
 
     for (let i = 0; i <= pattern.length; i++) {
