@@ -12,13 +12,62 @@ export interface Result {
   handler: Array<Function> | undefined;
 }
 
+export type StaticMapType = Record<string, Result>
+
+const METHOD_GET = 0;
+const METHOD_POST = 1;
+const METHOD_PUT = 2;
+const METHOD_DELETE = 3;
+const METHOD_PATCH = 4;
+const METHOD_ALL = 5;
+const METHOD_UNKNOWN = -1;
+
+// slots for methods outside the six above (HEAD, OPTIONS, lowercase, ...).
+// an id is only an index, so sharing the counter across routers is harmless.
+const extraMethodIds = new Map<string, number>();
+let nextMethodId = 6;
+
+/**
+ * Maps a method to its handler slot. Does not register unknown methods, so it
+ * is safe on the read path - an unregistered method gets METHOD_UNKNOWN, which
+ * no handler is ever stored under.
+ * @param method - HTTP method, or ALL_METHOD
+ * @returns the slot index, or METHOD_UNKNOWN
+ */
+const lookupMethodId = (method: string): number => {
+  if (method === "GET") return METHOD_GET;
+  if (method === "POST") return METHOD_POST;
+  if (method === "PUT") return METHOD_PUT;
+  if (method === "DELETE") return METHOD_DELETE;
+  if (method === "PATCH") return METHOD_PATCH;
+  if (method === ALL_METHOD || method === "ANY") return METHOD_ALL;
+  const id = extraMethodIds.get(method);
+  return id === undefined ? METHOD_UNKNOWN : id;
+};
+
+/**
+ * Like lookupMethodId, but hands a fresh slot to a method seen for the first
+ * time. Only for the registration path.
+ * @param method - HTTP method, or ALL_METHOD
+ * @returns the slot index, always a real one
+ */
+const getOrCreateMethodId = (method: string): number => {
+  const id = lookupMethodId(method);
+  if (id !== METHOD_UNKNOWN) return id;
+  const fresh = nextMethodId++;
+  extraMethodIds.set(method, fresh);
+  return fresh;
+};
+
 class Node {
   children: Record<string, Node>;
   isEndOfWord: boolean;
-  handlers: Record<string, Function[]> | undefined;
+  // stores handlers by method slot (see lookupMethodId)
+  handlers: Record<number, Function[]> | undefined;
   middlewares: Function[];
-  params: Record<string, string>;
-  finalHandler: Record<string, Array<Function> | undefined>;
+  // stores the param name for this node, by method slot
+  params: Record<number, string>;
+  finalHandler: Record<number, Array<Function> | undefined>;
   
   //
   paramChild: Node | undefined;
@@ -47,14 +96,14 @@ export class TrieRouter {
   find: Function;
 
   // pre-computed lookup results for static (no ":" / "*") paths, per method.
-  private getStatic: Record<string, Result>;
-  private postStatic: Record<string, Result>;
-  private putStatic: Record<string, Result>;
-  private deleteStatic: Record<string, Result>;
-  private patchStatic: Record<string, Result>;
-  private allStatic: Record<string, Result>;
+  private getStatic: StaticMapType;
+  private postStatic: StaticMapType;
+  private putStatic: StaticMapType;
+  private deleteStatic: StaticMapType;
+  private patchStatic: StaticMapType;
+  private allStatic: StaticMapType;
   // anything outside the six above (HEAD, OPTIONS, lowercase methods, ...).
-  private otherStatic: Record<string, Record<string, Result>> | null;
+  private otherStatic: Record<string, StaticMapType> | null;
 
   private staticPaths: Set<string>;
 
@@ -82,6 +131,7 @@ export class TrieRouter {
    */
   private uncachedSearch(path: string, method: string): Result {
     let node: Node = this.root;
+    const methodId = lookupMethodId(method);
 
     let middlewares: Array<Function> | undefined;
     let params: Record<string, string> | undefined;
@@ -116,8 +166,11 @@ export class TrieRouter {
           }
         }
         node = node.paramChild;
-        if (params === undefined) params = {};
-        params[node.params[method]] = element;
+        const paramName = node.params[methodId] ?? node.params[METHOD_ALL];
+        if (paramName !== undefined) {
+          if (params === undefined) params = {};
+          params[paramName] = element;
+        }
       } else if (node.wildcardChild !== undefined) {
         node = node.wildcardChild;
         break;
@@ -140,7 +193,7 @@ export class TrieRouter {
       }
     }
 
-    const methodHandler = node.handlers[method] ?? node.handlers[ALL_METHOD];
+    const methodHandler = node.handlers[lookupMethodId(method)] ?? node.handlers[METHOD_ALL];
     return {
       params: params,
       middlewares: middlewares ?? this.defaultMiddlewares(),
@@ -189,7 +242,7 @@ export class TrieRouter {
    * @param method - HTTP method, or ALL_METHOD
    * @returns the map, or undefined if the method has none yet
    */
-  private getStaticMapFor(method: string): Record<string, Result> | undefined {
+  private getStaticMapFor(method: string): StaticMapType | undefined {
     switch (method) {
       case "GET":
         return this.getStatic;
@@ -213,12 +266,12 @@ export class TrieRouter {
    * @param method - HTTP method, or ALL_METHOD
    * @returns the method's static cache map
    */
-  private getOrCreateStaticMapFor(method: string): Record<string, Result> {
+  private getOrCreateStaticMapFor(method: string): StaticMapType {
     const existing = this.getStaticMapFor(method);
     if (existing !== undefined) return existing;
 
     if (!this.otherStatic) this.otherStatic = Object.create(null);
-    const map: Record<string, Result> = Object.create(null);
+    const map: StaticMapType = Object.create(null);
     this.otherStatic[method] = map;
     return map;
   }
@@ -285,11 +338,12 @@ export class TrieRouter {
     this.getOrCreateStaticMapFor(method);
 
     const handlers = Array.isArray(handler) ? handler : [handler];
+    const methodId = getOrCreateMethodId(method);
     let node = this.root;
 
     if (pattern === "/") {
       node.isEndOfWord = true;
-      node.handlers[method] = handlers;
+      node.handlers[methodId] = handlers;
       if (isNewMethod) this.rebuildStatic();
       this.reArrangeHandler(pattern);
       return;
@@ -314,10 +368,10 @@ export class TrieRouter {
 
       node = node.children[key];
       if (cleanParam) {
-        node.params[method] = cleanParam;
+        node.params[methodId] = cleanParam;
       }
     }
-    node.handlers[method] = handlers;
+    node.handlers[methodId] = handlers;
     node.isEndOfWord = true;
 
     if (isNewMethod) this.rebuildStatic();
@@ -349,6 +403,7 @@ export class TrieRouter {
     }
 
     let node = this.root;
+    const methodId = lookupMethodId(method);
     const pathSegments = pattern.split('/');
 
     let middlewares: Array<Function> | undefined;
@@ -383,8 +438,11 @@ export class TrieRouter {
           }
         }
         node = node.paramChild;
-        if (params === undefined) params = {};
-        params[node.params[method]] = element;
+        const paramName = node.params[methodId] ?? node.params[METHOD_ALL];
+        if (paramName !== undefined) {
+          if (params === undefined) params = {};
+          params[paramName] = element;
+        }
       } else if (node.wildcardChild !== undefined) {
         node = node.wildcardChild;
         break;
@@ -409,7 +467,7 @@ export class TrieRouter {
       }
     }
 
-    const methodHandler = node.handlers[method] ?? node.handlers[ALL_METHOD];
+    const methodHandler = node.handlers[methodId] ?? node.handlers[METHOD_ALL];
     return {
       params: params,
       middlewares: middlewares ?? this.defaultMiddlewares(),
@@ -444,6 +502,7 @@ export class TrieRouter {
     }
 
     let node = this.root;
+    const methodId = lookupMethodId(method);
     let element = "";
 
     let middlewares: Array<Function> | undefined;
@@ -479,8 +538,11 @@ export class TrieRouter {
             }
           }
           node = node.paramChild;
-          if (params === undefined) params = {};
-          params[node.params[method]] = element;
+          const paramName = node.params[methodId] ?? node.params[METHOD_ALL];
+          if (paramName !== undefined) {
+            if (params === undefined) params = {};
+            params[paramName] = element;
+          }
         } else if (node.wildcardChild !== undefined) {
           node = node.wildcardChild;
           break;
@@ -510,7 +572,7 @@ export class TrieRouter {
       }
     }
 
-    const methodHandler = node.handlers[method] ?? node.handlers[ALL_METHOD];
+    const methodHandler = node.handlers[methodId] ?? node.handlers[METHOD_ALL];
     return {
       params: params,
       middlewares: middlewares ?? this.defaultMiddlewares(),
@@ -528,6 +590,7 @@ export class TrieRouter {
    */
   compiledFind(method: string, pattern: string) {
     let node = this.root;
+    const methodId = lookupMethodId(method);
     const pathSegments = pattern.split("/");
 
     let params: Record<string, string> | undefined;
@@ -543,8 +606,11 @@ export class TrieRouter {
         node = next;
       } else if (node.paramChild !== undefined) {
         node = node.paramChild;
-        if (params === undefined) params = {};
-        params[node.params[method]] = element;
+        const paramName = node.params[methodId] ?? node.params[METHOD_ALL];
+        if (paramName !== undefined) {
+          if (params === undefined) params = {};
+          params[paramName] = element;
+        }
       } else if (node.wildcardChild !== undefined) {
         node = node.wildcardChild;
         break;
@@ -553,14 +619,14 @@ export class TrieRouter {
           params: params,
           middlewares: undefined,
           handler:
-            node?.finalHandler?.[method] ?? node?.finalHandler?.[ALL_METHOD],
+            node?.finalHandler?.[methodId] ?? node?.finalHandler?.[METHOD_ALL],
         };
       }
     }
     return {
       params: params,
       middlewares: undefined,
-      handler: node?.finalHandler?.[method] ?? node?.finalHandler?.[ALL_METHOD],
+      handler: node?.finalHandler?.[methodId] ?? node?.finalHandler?.[METHOD_ALL],
     };
   }
   /**
@@ -596,9 +662,10 @@ export class TrieRouter {
     if (node.isEndOfWord) {
       if (!node.finalHandler) node.finalHandler = {};
       const ownMiddlewares = [...inheritedMiddlewares, ...node?.middlewares];
-      for (const method in node.handlers) {
-        const finalHandler = [...ownMiddlewares, ...node.handlers[method]];
-        node.finalHandler[method] = finalHandler;
+      for (const key in node.handlers) {
+        const id = Number(key);
+        const finalHandler = [...ownMiddlewares, ...node.handlers[id]];
+        node.finalHandler[id] = finalHandler;
       }
     }
 
