@@ -148,6 +148,88 @@ export function describeDieselPortedCases(method: "search" | "optimisedSearch" |
       expect((r as any)[method]("GET", "/user/123/settings").params).toEqual({ name: "123" });
     });
   });
+
+  // A route registered under ALL is found by any method, because the handler
+  // lookup falls back to the ALL slot. The param NAME has no such fallback:
+  // it is stored under the registering method and read back under the
+  // requesting one, so a cross-method match used to name the param
+  // "undefined" instead of "id".
+  describe(`TrieRouter.${method} - params on an ALL route matched by another method`, () => {
+    test("keeps the param name when ALL is matched by a different method", () => {
+      const r = new TrieRouter();
+      r.add("ALL", "/a/:id", () => "all");
+
+      expect((r as any)[method]("POST", "/a/9").params).toEqual({ id: "9" });
+    });
+
+    // the walk still enters the param branch when a paramChild exists for a
+    // different method, but no name is registered for the requested one -
+    // that must not invent a key rather than naming the param "undefined".
+    test("adds no param key when the method has no name registered", () => {
+      const r = new TrieRouter();
+      r.add("GET", "/a/:id", () => "g");
+
+      const result = (r as any)[method]("POST", "/a/9");
+      expect(result.params).toBeUndefined();
+    });
+  });
+
+  // Methods outside GET/POST/PUT/DELETE/PATCH/ALL get their slot from the
+  // shared `nextMethodId` counter instead of a constant. Nothing else in the
+  // suite registers one, so a counter that starts at or below METHOD_ALL used
+  // to hand the first custom method the ALL slot - and every one of these
+  // assertions passed anyway, because they were all testing the six constants.
+  describe(`TrieRouter.${method} - methods outside the six built-in slots`, () => {
+    test("a custom method does not answer other methods", () => {
+      const r = new TrieRouter();
+      r.add("HEAD", "/x", () => "head");
+
+      expect(runResult((r as any)[method]("HEAD", "/x"))).toBe("head");
+      for (const other of ["GET", "POST", "PUT", "DELETE", "PATCH"]) {
+        expect(runResult((r as any)[method](other, "/x"))).toBeNull();
+      }
+    });
+
+    // if two custom methods ever shared a slot the later add would silently
+    // win for both, so assert each one still answers with its own handler.
+    test("custom methods keep separate slots", () => {
+      const r = new TrieRouter();
+      const methods = ["HEAD", "OPTIONS", "PURGE", "LOCK"];
+      for (const m of methods) r.add(m, "/z", () => m);
+
+      for (const m of methods) {
+        expect(runResult((r as any)[method](m, "/z"))).toBe(m);
+      }
+      expect(runResult((r as any)[method]("GET", "/z"))).toBeNull();
+    });
+
+    // the collision case that motivated this block: a custom method must not
+    // land in the ALL slot, in either registration order.
+    test("a custom method neither overwrites nor is shadowed by ALL", () => {
+      const r = new TrieRouter();
+      r.add("ALL", "/y", () => "all");
+      r.add("HEAD", "/y", () => "head");
+
+      expect(runResult((r as any)[method]("HEAD", "/y"))).toBe("head");
+      expect(runResult((r as any)[method]("GET", "/y"))).toBe("all");
+
+      const reversed = new TrieRouter();
+      reversed.add("HEAD", "/y", () => "head");
+      reversed.add("ALL", "/y", () => "all");
+
+      expect(runResult((reversed as any)[method]("HEAD", "/y"))).toBe("head");
+      expect(runResult((reversed as any)[method]("GET", "/y"))).toBe("all");
+    });
+
+    // params are keyed by slot too, so the same collision would corrupt them.
+    test("a custom method keeps its own param names", () => {
+      const r = new TrieRouter();
+      r.add("HEAD", "/c/:id", () => "head");
+
+      expect((r as any)[method]("HEAD", "/c/9").params).toEqual({ id: "9" });
+      expect(runResult((r as any)[method]("GET", "/c/9"))).toBeNull();
+    });
+  });
 }
 
 // The lazy `middlewares` init only materialises the array once something
