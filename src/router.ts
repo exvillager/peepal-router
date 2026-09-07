@@ -128,203 +128,13 @@ export class TrieRouter {
   }
 
   /**
-   * Walks the trie for a path, bypassing the static cache.
-   * @param path - request path, e.g. "/users/1"
-   * @param method - HTTP method, or ALL_METHOD
-   * @returns params, middlewares, and the matched handler (undefined on a miss)
+   * Alias for insert.
+   * @param method - HTTP method, or ALL_METHOD to match any
+   * @param pattern - route pattern; ":name" is a param, "*" a wildcard
+   * @param handler - one handler or an array of them
    */
-  private uncachedSearch(path: string, method: string): Result {
-    let node: Node = this.root;
-    const methodId = lookupMethodId(method);
-
-    let middlewares: Array<Function> | undefined;
-    let params: Record<string, string> | undefined;
-    const pathSegments = path.split("/");
-
-    for (let i = 0; i < pathSegments.length; i++) {
-      const element = pathSegments[i];
-      if (element.length === 0) {
-        continue;
-      }
-
-      let next = node.children[element];
-      if (next !== undefined) {
-        if (node.wildcardChild !== undefined) {
-          const mw = node.wildcardChild.middlewares;
-          if (mw.length > 0) {
-            if (middlewares === undefined) {
-              middlewares = this.is_gm ? this.globalMiddlewares.slice() : [];
-            }
-            for (let j = 0; j < mw.length; j++) middlewares.push(mw[j]);
-          }
-        }
-        node = next;
-      } else if (node.paramChild !== undefined) {
-        if (node.wildcardChild !== undefined) {
-          const mw = node.wildcardChild.middlewares;
-          if (mw.length > 0) {
-            if (middlewares === undefined) {
-              middlewares = this.is_gm ? this.globalMiddlewares.slice() : [];
-            }
-            for (let j = 0; j < mw.length; j++) middlewares.push(mw[j]);
-          }
-        }
-        node = node.paramChild;
-        const paramName = node.params[methodId] ?? node.params[METHOD_ALL];
-        if (paramName !== undefined) {
-          if (params === undefined) params = {};
-          params[paramName] = element;
-        }
-      } else if (node.wildcardChild !== undefined) {
-        node = node.wildcardChild;
-        break;
-      } else {
-        return {
-          params: params,
-          middlewares: middlewares ?? this.defaultMiddlewares(),
-          handler: undefined,
-        };
-      }
-    }
-
-    if (node?.middlewares?.length > 0) {
-      const mw = node.middlewares;
-      if (middlewares === undefined) {
-        middlewares = this.is_gm ? this.globalMiddlewares.slice() : [];
-      }
-      for (let j = 0; j < mw.length; j++) {
-        middlewares.push(mw[j]);
-      }
-    }
-
-    const methodHandler = node.handlers[methodId] ?? node.handlers[METHOD_ALL];
-    return {
-      params: params,
-      middlewares: middlewares ?? this.defaultMiddlewares(),
-      handler: methodHandler,
-    };
-  }
-
-  private collectStaticMiddlewares(path: string) {
-    // will imple myself , don't touch it.
-  }
-  
-  /**
-   * Recomputes the static cache entry for one path, for every known method.
-   * A method with no handler is dropped so it falls through to the trie walk.
-   * @param path - static path to recompute
-   */
-  private reArrangeHandler(path: string) {
-    const methods = ["GET", "POST", "PUT", "DELETE", "PATCH", ALL_METHOD];
-
-    if (this.otherStatic) {
-      for (const key in this.otherStatic) methods.push(key);
-    }
-
-    for (const method of methods) {
-      const map = this.getOrCreateStaticMapFor(method);
-      const result = this.uncachedSearch(path, method);
-      // if the handler doesn't exist it means , the user hasn't registered the api for that method
-      // so we can delete that path for that method map ( it's safe )
-      if (result.handler === undefined) {
-        delete map[path];
-        continue;
-      }
-      map[path] = result;
-    }
-  }
-
-  /**
-   * Recomputes the static cache for every registered static path.
-   */
-  private rebuildStatic() {
-    for (const p of this.staticPaths) this.reArrangeHandler(p);
-  }
-
-  /**
-   * Looks up the static cache map for a method.
-   * @param method - HTTP method, or ALL_METHOD
-   * @returns the map, or undefined if the method has none yet
-   */
-  private getStaticMapFor(method: string): StaticMapType | undefined {
-    switch (method) {
-      case "GET":
-        return this.getStatic;
-      case "POST":
-        return this.postStatic;
-      case "PUT":
-        return this.putStatic;
-      case "DELETE":
-        return this.deleteStatic;
-      case "PATCH":
-        return this.patchStatic;
-      case ALL_METHOD:
-        return this.allStatic;
-      default:
-        return this.otherStatic ? this.otherStatic[method] : undefined;
-    }
-  }
-
-  /**
-   * Like getStaticMapFor, but creates the map under otherStatic when missing.
-   * @param method - HTTP method, or ALL_METHOD
-   * @returns the method's static cache map
-   */
-  private getOrCreateStaticMapFor(method: string): StaticMapType {
-    const existing = this.getStaticMapFor(method);
-    if (existing !== undefined) return existing;
-
-    if (!this.otherStatic) this.otherStatic = Object.create(null);
-    const map: StaticMapType = Object.create(null);
-    this.otherStatic[method] = map;
-    return map;
-  }
-
-  /**
-   * Alias for pushMiddleware.
-   * @param pattern - path to bind to; "/" makes it global
-   * @param handlers - one middleware or an array of handlers
-   */
-  addMiddleware(pattern: string, handlers: Function | Function[]) {
-    return this.pushMiddleware(pattern, handlers);
-  }
-
-  /**
-   * Binds middleware to a path, then rebuilds the static cache.
-   * @param pattern - path to bind to; "/" makes it global
-   * @param handlers - one middleware or an array of middlewares
-   */
-  pushMiddleware(pattern: string, handlers: Function | Function[]) {
-    if (!Array.isArray(handlers)) handlers = [handlers];
-    if (pattern === "/") {
-      this.globalMiddlewares.push(...handlers);
-      this.is_gm = true;
-      this.rebuildStatic();
-      return;
-    }
-
-    let node = this.root;
-    const pathSegments = pattern.split("/").filter(Boolean);
-
-    for (const element of pathSegments) {
-      let key = element;
-      if (element.startsWith(":")) {
-        key = ":";
-      }
-
-      if (!node.children[key]) node.children[key] = new Node();
-
-      // Add child to parent node;
-      if (key === '*') node.wildcardChild = node.children[key];
-      if (key === ':') node.paramChild = node.children[key];
-
-      node = node.children[key];
-    }
-
-    node.middlewares.push(...handlers);
-
-    node.isEndOfWord = true;
-    this.rebuildStatic();
+  add(method: string, pattern: string, handler: Function | Function[]) {
+    return this.insert(method, pattern, handler);
   }
 
   /**
@@ -383,13 +193,50 @@ export class TrieRouter {
   }
 
   /**
-   * Alias for insert.
-   * @param method - HTTP method, or ALL_METHOD to match any
-   * @param pattern - route pattern; ":name" is a param, "*" a wildcard
-   * @param handler - one handler or an array of them
+   * Alias for pushMiddleware.
+   * @param pattern - path to bind to; "/" makes it global
+   * @param handlers - one middleware or an array of handlers
    */
-  add(method: string, pattern: string, handler: Function | Function[]) {
-    return this.insert(method, pattern, handler);
+  addMiddleware(pattern: string, handlers: Function | Function[]) {
+    return this.pushMiddleware(pattern, handlers);
+  }
+
+  /**
+   * Binds middleware to a path, then rebuilds the static cache.
+   * @param pattern - path to bind to; "/" makes it global
+   * @param handlers - one middleware or an array of middlewares
+   */
+  pushMiddleware(pattern: string, handlers: Function | Function[]) {
+    if (!Array.isArray(handlers)) handlers = [handlers];
+    if (pattern === "/") {
+      this.globalMiddlewares.push(...handlers);
+      this.is_gm = true;
+      this.rebuildStatic();
+      return;
+    }
+
+    let node = this.root;
+    const pathSegments = pattern.split("/").filter(Boolean);
+
+    for (const element of pathSegments) {
+      let key = element;
+      if (element.startsWith(":")) {
+        key = ":";
+      }
+
+      if (!node.children[key]) node.children[key] = new Node();
+
+      // Add child to parent node;
+      if (key === '*') node.wildcardChild = node.children[key];
+      if (key === ':') node.paramChild = node.children[key];
+
+      node = node.children[key];
+    }
+
+    node.middlewares.push(...handlers);
+
+    node.isEndOfWord = true;
+    this.rebuildStatic();
   }
 
   /**
@@ -477,18 +324,6 @@ export class TrieRouter {
       middlewares: middlewares ?? this.defaultMiddlewares(),
       handler: methodHandler,
     };
-  }
-
-  /**
-   * The middleware list for a lookup that collected none of its own. Global
-   * middlewares are copied because callers may mutate the result; with none
-   * registered, every such lookup shares one frozen empty array.
-   * @returns the middlewares to hand back when none were collected
-   */
-  private defaultMiddlewares(): Function[] {
-    return this.is_gm
-      ? this.globalMiddlewares.slice()
-      : (NO_MIDDLEWARES as Function[]);
   }
 
   /**
@@ -633,6 +468,14 @@ export class TrieRouter {
       handler: node?.finalHandler?.[methodId] ?? node?.finalHandler?.[METHOD_ALL],
     };
   }
+
+  /**
+   * Bakes middlewares into each route's handler chain, ready for compiledFind.
+   */
+  compile() {
+    this.compileNode(this.root, this.globalMiddlewares);
+  }
+
   /**
    * First find() call: compiles the trie, swaps find() for compiledFind, then delegates.
    * @param method - HTTP method
@@ -645,13 +488,6 @@ export class TrieRouter {
 
     this.find = this.compiledFind;
     return this.compiledFind(method, pattern);
-  }
-
-  /**
-   * Bakes middlewares into each route's handler chain, ready for compiledFind.
-   */
-  compile() {
-    this.compileNode(this.root, this.globalMiddlewares);
   }
 
   /**
@@ -683,5 +519,170 @@ export class TrieRouter {
           : inheritedMiddlewares;
       this.compileNode(node.children[key], childInherited);
     }
+  }
+
+  /**
+   * Looks up the static cache map for a method.
+   * @param method - HTTP method, or ALL_METHOD
+   * @returns the map, or undefined if the method has none yet
+   */
+  private getStaticMapFor(method: string): StaticMapType | undefined {
+    switch (method) {
+      case "GET":
+        return this.getStatic;
+      case "POST":
+        return this.postStatic;
+      case "PUT":
+        return this.putStatic;
+      case "DELETE":
+        return this.deleteStatic;
+      case "PATCH":
+        return this.patchStatic;
+      case ALL_METHOD:
+        return this.allStatic;
+      default:
+        return this.otherStatic ? this.otherStatic[method] : undefined;
+    }
+  }
+
+  /**
+   * Like getStaticMapFor, but creates the map under otherStatic when missing.
+   * @param method - HTTP method, or ALL_METHOD
+   * @returns the method's static cache map
+   */
+  private getOrCreateStaticMapFor(method: string): StaticMapType {
+    const existing = this.getStaticMapFor(method);
+    if (existing !== undefined) return existing;
+
+    if (!this.otherStatic) this.otherStatic = Object.create(null);
+    const map: StaticMapType = Object.create(null);
+    this.otherStatic[method] = map;
+    return map;
+  }
+
+  /**
+   * Recomputes the static cache entry for one path, for every known method.
+   * A method with no handler is dropped so it falls through to the trie walk.
+   * @param path - static path to recompute
+   */
+  private reArrangeHandler(path: string) {
+    const methods = ["GET", "POST", "PUT", "DELETE", "PATCH", ALL_METHOD];
+
+    if (this.otherStatic) {
+      for (const key in this.otherStatic) methods.push(key);
+    }
+
+    for (const method of methods) {
+      const map = this.getOrCreateStaticMapFor(method);
+      const result = this.uncachedSearch(path, method);
+      // if the handler doesn't exist it means , the user hasn't registered the api for that method
+      // so we can delete that path for that method map ( it's safe )
+      if (result.handler === undefined) {
+        delete map[path];
+        continue;
+      }
+      map[path] = result;
+    }
+  }
+
+  /**
+   * Recomputes the static cache for every registered static path.
+   */
+  private rebuildStatic() {
+    for (const p of this.staticPaths) this.reArrangeHandler(p);
+  }
+
+  /**
+   * Walks the trie for a path, bypassing the static cache.
+   * @param path - request path, e.g. "/users/1"
+   * @param method - HTTP method, or ALL_METHOD
+   * @returns params, middlewares, and the matched handler (undefined on a miss)
+   */
+  private uncachedSearch(path: string, method: string): Result {
+    let node: Node = this.root;
+    const methodId = lookupMethodId(method);
+
+    let middlewares: Array<Function> | undefined;
+    let params: Record<string, string> | undefined;
+    const pathSegments = path.split("/");
+
+    for (let i = 0; i < pathSegments.length; i++) {
+      const element = pathSegments[i];
+      if (element.length === 0) {
+        continue;
+      }
+
+      let next = node.children[element];
+      if (next !== undefined) {
+        if (node.wildcardChild !== undefined) {
+          const mw = node.wildcardChild.middlewares;
+          if (mw.length > 0) {
+            if (middlewares === undefined) {
+              middlewares = this.is_gm ? this.globalMiddlewares.slice() : [];
+            }
+            for (let j = 0; j < mw.length; j++) middlewares.push(mw[j]);
+          }
+        }
+        node = next;
+      } else if (node.paramChild !== undefined) {
+        if (node.wildcardChild !== undefined) {
+          const mw = node.wildcardChild.middlewares;
+          if (mw.length > 0) {
+            if (middlewares === undefined) {
+              middlewares = this.is_gm ? this.globalMiddlewares.slice() : [];
+            }
+            for (let j = 0; j < mw.length; j++) middlewares.push(mw[j]);
+          }
+        }
+        node = node.paramChild;
+        const paramName = node.params[methodId] ?? node.params[METHOD_ALL];
+        if (paramName !== undefined) {
+          if (params === undefined) params = {};
+          params[paramName] = element;
+        }
+      } else if (node.wildcardChild !== undefined) {
+        node = node.wildcardChild;
+        break;
+      } else {
+        return {
+          params: params,
+          middlewares: middlewares ?? this.defaultMiddlewares(),
+          handler: undefined,
+        };
+      }
+    }
+
+    if (node?.middlewares?.length > 0) {
+      const mw = node.middlewares;
+      if (middlewares === undefined) {
+        middlewares = this.is_gm ? this.globalMiddlewares.slice() : [];
+      }
+      for (let j = 0; j < mw.length; j++) {
+        middlewares.push(mw[j]);
+      }
+    }
+
+    const methodHandler = node.handlers[methodId] ?? node.handlers[METHOD_ALL];
+    return {
+      params: params,
+      middlewares: middlewares ?? this.defaultMiddlewares(),
+      handler: methodHandler,
+    };
+  }
+
+  /**
+   * The middleware list for a lookup that collected none of its own. Global
+   * middlewares are copied because callers may mutate the result; with none
+   * registered, every such lookup shares one frozen empty array.
+   * @returns the middlewares to hand back when none were collected
+   */
+  private defaultMiddlewares(): Function[] {
+    return this.is_gm
+      ? this.globalMiddlewares.slice()
+      : (NO_MIDDLEWARES as Function[]);
+  }
+
+  private collectStaticMiddlewares(path: string) {
+    // will imple myself , don't touch it.
   }
 }
