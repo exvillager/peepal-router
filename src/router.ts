@@ -14,18 +14,22 @@ export interface Result {
 
 export type StaticMapType = Record<string, Result>
 
-const METHOD_GET = 0;
-const METHOD_POST = 1;
-const METHOD_PUT = 2;
-const METHOD_DELETE = 3;
-const METHOD_PATCH = 4;
-const METHOD_ALL = 5;
-const METHOD_UNKNOWN = -1;
+// method slots. keep them non-negative ints - V8 keeps those in the elements
+// store, but -1 is the name "-1" and makes every miss a named lookup.
+// 0 is never written to, so an unknown method reads a hole.
+const METHOD_UNKNOWN = 0;
+const METHOD_GET = 1;
+const METHOD_POST = 2;
+const METHOD_PUT = 3;
+const METHOD_DELETE = 4;
+const METHOD_PATCH = 5;
+const METHOD_ALL = 6;
 
 // slots for methods outside the six above (HEAD, OPTIONS, lowercase, ...).
 // an id is only an index, so sharing the counter across routers is harmless.
+// must stay past METHOD_ALL, or the first custom method takes the ALL slot.
 const extraMethodIds = new Map<string, number>();
-let nextMethodId = 6;
+let nextMethodId = 7;
 
 /**
  * Maps a method to its handler slot. Does not register unknown methods, so it
@@ -40,7 +44,7 @@ const lookupMethodId = (method: string): number => {
   if (method === "PUT") return METHOD_PUT;
   if (method === "DELETE") return METHOD_DELETE;
   if (method === "PATCH") return METHOD_PATCH;
-  if (method === ALL_METHOD || method === "ANY") return METHOD_ALL;
+  if (method === ALL_METHOD) return METHOD_ALL;
   const id = extraMethodIds.get(method);
   return id === undefined ? METHOD_UNKNOWN : id;
 };
@@ -193,7 +197,7 @@ export class TrieRouter {
       }
     }
 
-    const methodHandler = node.handlers[lookupMethodId(method)] ?? node.handlers[METHOD_ALL];
+    const methodHandler = node.handlers[methodId] ?? node.handlers[METHOD_ALL];
     return {
       params: params,
       middlewares: middlewares ?? this.defaultMiddlewares(),
